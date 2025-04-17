@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Platform Shooter Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #222;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #87CEEB;
+            border: 2px solid #333;
+        }
+        #game-container {
+            position: relative;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        <div id="controls">
+            Controls: Arrow keys to move, Up to jump, Space to shoot
+        </div>
+    </div>
+
+    <script>
+        // Game setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Game constants
+        const GRAVITY = 0.5;
+        const JUMP_FORCE = -13;
+        const MOVEMENT_SPEED = 5;
+        const BULLET_SPEED = 10;
+        const ENEMY_SPEED = 2;
+        
+        // Initial player position - place player firmly on first platform
+        const INITIAL_PLAYER_X = 100;
+        const INITIAL_PLAYER_Y = 340; // Positioned above the first platform
+        
+        // Game state
+        let gameOver = false;
+        let score = 0;
+        
+        // Player object
+        const player = {
+            x: INITIAL_PLAYER_X,
+            y: INITIAL_PLAYER_Y,
+            width: 40,
+            height: 60,
+            velocityX: 0,
+            velocityY: 0,
+            jumping: false,
+            facingRight: true,
+            color: '#FF5733',
+            update: function() {
+                // Apply gravity
+                this.velocityY += GRAVITY;
+                
+                // Update position
+                this.x += this.velocityX;
+                this.y += this.velocityY;
+                
+                // Ground collision check with platforms
+                let onGround = false;
+                
+                for (let platform of platforms) {
+                    // Adjust for camera offset when checking collisions
+                    const adjustedPlatformX = platform.x - camera.x;
+                    
+                    // Check if player is on or slightly above the platform and falling
+                    if (this.y + this.height <= platform.y + 5 && 
+                        this.y + this.height + this.velocityY >= platform.y &&
+                        this.x + this.width > adjustedPlatformX && 
+                        this.x < adjustedPlatformX + platform.width) {
+                        
+                        this.y = platform.y - this.height;
+                        this.velocityY = 0;
+                        onGround = true;
+                        this.jumping = false;
+                    }
+                }
+                
+                // Canvas boundary checks
+                if (this.x < 0) this.x = 0;
+                if (this.x + this.width > canvas.width / 2 + 100) {
+                    this.x = canvas.width / 2 + 100 - this.width;
+                    camera.x += this.velocityX; // Move camera when player reaches right boundary
+                }
+                
+                // Bottom boundary (death)
+                if (this.y > canvas.height) {
+                    gameOver = true;
+                }
+                
+                // Reset horizontal velocity
+                this.velocityX = 0;
+            },
+            draw: function() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                // Draw eyes to show which way player is facing
+                ctx.fillStyle = 'white';
+                if (this.facingRight) {
+                    ctx.fillRect(this.x + 25, this.y + 15, 10, 10);
+                } else {
+                    ctx.fillRect(this.x + 5, this.y + 15, 10, 10);
+                }
+            },
+            jump: function() {
+                if (!this.jumping) {
+                    this.velocityY = JUMP_FORCE;
+                    this.jumping = true;
+                }
+            },
+            moveLeft: function() {
+                this.velocityX = -MOVEMENT_SPEED;
+                this.facingRight = false;
+            },
+            moveRight: function() {
+                this.velocityX = MOVEMENT_SPEED;
+                this.facingRight = true;
+            },
+            shoot: function() {
+                const bulletX = this.facingRight ? this.x + this.width : this.x;
+                const bulletDirection = this.facingRight ? 1 : -1;
+                
+                bullets.push({
+                    x: bulletX,
+                    y: this.y + 20,
+                    width: 10,
+                    height: 5,
+                    speed: BULLET_SPEED * bulletDirection,
+                    color: '#FFFF00'
+                });
+                
+                // Debug log to verify shooting is working
+                console.log("Bullet fired:", { x: bulletX, direction: bulletDirection });
+            }
+        };
+        
+        // Camera object
+        const camera = {
+            x: 0,
+            y: 0
+        };
+        
+        // Platforms
+        let platforms = [
+            { x: 0, y: 400, width: 300, height: 20, color: '#8B4513' },
+            { x: 350, y: 350, width: 200, height: 20, color: '#8B4513' },
+            { x: 600, y: 300, width: 200, height: 20, color: '#8B4513' },
+            { x: 850, y: 250, width: 200, height: 20, color: '#8B4513' },
+            { x: 1100, y: 300, width: 250, height: 20, color: '#8B4513' },
+            { x: 1400, y: 350, width: 300, height: 20, color: '#8B4513' },
+            { x: 1750, y: 400, width: 350, height: 20, color: '#8B4513' },
+            { x: 2150, y: 350, width: 200, height: 20, color: '#8B4513' },
+            { x: 2400, y: 300, width: 300, height: 20, color: '#8B4513' },
+            { x: 2750, y: 250, width: 400, height: 20, color: '#8B4513' }
+        ];
+        
+        // Boxes that block bullets
+        let boxes = [
+            { x: 150, y: 350, width: 50, height: 50, color: '#A0522D' },
+            { x: 450, y: 300, width: 50, height: 50, color: '#A0522D' },
+            { x: 700, y: 250, width: 50, height: 50, color: '#A0522D' },
+            { x: 1200, y: 250, width: 50, height: 50, color: '#A0522D' },
+            { x: 1500, y: 300, width: 50, height: 50, color: '#A0522D' },
+            { x: 1900, y: 350, width: 50, height: 50, color: '#A0522D' },
+            { x: 2250, y: 300, width: 50, height: 50, color: '#A0522D' },
+            { x: 2500, y: 250, width: 50, height: 50, color: '#A0522D' },
+            { x: 2900, y: 200, width: 50, height: 50, color: '#A0522D' }
+        ];
+        
+        // Enemies array
+        let enemies = [];
+        
+        // Create enemies on platforms
+        function createEnemies() {
+            // Add enemies on some platforms (not the first one)
+            for (let i = 1; i < platforms.length; i++) {
+                // 70% chance to add an enemy to this platform
+                if (Math.random() < 0.7) {
+                    const platform = platforms[i];
+                    
+                    // Ensure enemy is fully on the platform
+                    const enemyX = platform.x + platform.width / 2;
+                    const enemyY = platform.y - 40; // Place enemy on top of platform
+                    
+                    enemies.push({
+                        x: enemyX,
+                        y: enemyY,
+                        width: 30,
+                        height: 40,
+                        velocityX: ENEMY_SPEED,
+                        platform: platform,
+                        color: '#FF0000',
+                        update: function() {
+                            // Move enemy
+                            this.x += this.velocityX;
+                            
+                            // Check if enemy reached platform edge
+                            if (this.x <= this.platform.x || 
+                                this.x + this.width >= this.platform.x + this.platform.width) {
+                                // Turn around
+                                this.velocityX = -this.velocityX;
+                            }
+                        },
+                        draw: function(cameraX) {
+                            ctx.fillStyle = this.color;
+                            ctx.fillRect(this.x - cameraX, this.y, this.width, this.height);
+                            
+                            // Add eyes to show direction
+                            ctx.fillStyle = 'white';
+                            if (this.velocityX > 0) {
+                                ctx.fillRect(this.x - cameraX + 20, this.y + 10, 8, 8);
+                            } else {
+                                ctx.fillRect(this.x - cameraX + 2, this.y + 10, 8, 8);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        
+        // Call this once at start
+        createEnemies();
+        
+        // Bullets array
+        let bullets = [];
+        
+        // Input handling
+        const keys = {};
+        let lastSpaceKeyState = false;
+        
+        window.addEventListener('keydown', function(e) {
+            keys[e.code] = true;
+            
+            // Prevent space from scrolling the page
+            if (e.code === 'Space') {
+                e.preventDefault();
+            }
+        });
+        
+        window.addEventListener('keyup', function(e) {
+            keys[e.code] = false;
+            
+            // Shoot on space release
+            if (e.code === 'Space') {
+                player.shoot();
+            }
+        });
+        
+        // Game update function
+        function update() {
+            if (gameOver) {
+                showGameOver();
+                return;
+            }
+            
+            // Handle input
+            if (keys['ArrowLeft']) player.moveLeft();
+            if (keys['ArrowRight']) player.moveRight();
+            if (keys['ArrowUp']) player.jump();
+            
+            // Handle shooting with spacebar (press and release)
+            if (keys['Space'] && !lastSpaceKeyState) {
+                player.shoot();
+            }
+            lastSpaceKeyState = keys['Space'];
+            
+            // Update player
+            player.update();
+            
+            // Update bullets
+            updateBullets();
+            
+            // Update enemies
+            updateEnemies();
+            
+            // Check player collision with enemies
+            checkEnemyCollisions();
+            
+            // Debug collision - uncomment to see player position
+            // console.log("Player position:", player.x, player.y);
+            
+            // Draw everything
+            render();
+            
+            // Continue game loop
+            requestAnimationFrame(update);
+        }
+        
+        // Update and handle bullets
+        function updateBullets() {
+            // Debug bullet array
+            if (bullets.length > 0) {
+                console.log("Active bullets:", bullets.length);
+            }
+            
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let bullet = bullets[i];
+                
+                // Move bullet
+                bullet.x += bullet.speed;
+                
+                // Check if bullet is off-screen
+                if (bullet.x < -camera.x - 50 || bullet.x > canvas.width - camera.x + 50) {
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collision with boxes
+                let hitBox = false;
+                for (let box of boxes) {
+                    const adjustedBoxX = box.x - camera.x;
+                    
+                    if (bullet.x + bullet.width > adjustedBoxX &&
+                        bullet.x < adjustedBoxX + box.width &&
+                        bullet.y + bullet.height > box.y &&
+                        bullet.y < box.y + box.height) {
+                        
+                        bullets.splice(i, 1);
+                        hitBox = true;
+                        break;
+                    }
+                }
+                
+                if (hitBox) continue;
+                
+                // Check collision with enemies
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    let enemy = enemies[j];
+                    
+                    if (bullet.x + bullet.width > enemy.x - camera.x &&
+                        bullet.x < enemy.x - camera.x + enemy.width &&
+                        bullet.y + bullet.height > enemy.y &&
+                        bullet.y < enemy.y + enemy.height) {
+                        
+                        // Remove enemy and bullet
+                        enemies.splice(j, 1);
+                        bullets.splice(i, 1);
+                        
+                        // Add to score
+                        score += 100;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Update enemies
+        function updateEnemies() {
+            for (let enemy of enemies) {
+                enemy.update();
+            }
+        }
+        
+        // Check for player collision with enemies
+        function checkEnemyCollisions() {
+            for (let enemy of enemies) {
+                if (player.x + player.width > enemy.x - camera.x &&
+                    player.x < enemy.x - camera.x + enemy.width &&
+                    player.y + player.height > enemy.y &&
+                    player.y < enemy.y + enemy.height) {
+                    
+                    // Player hit enemy - game over
+                    gameOver = true;
+                    return;
+                }
+            }
+        }
+        
+        // Render function
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky background
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw some clouds
+            drawClouds();
+            
+            // Draw platforms
+            for (let platform of platforms) {
+                ctx.fillStyle = platform.color;
+                ctx.fillRect(platform.x - camera.x, platform.y, platform.width, platform.height);
+            }
+            
+            // Draw boxes
+            for (let box of boxes) {
+                ctx.fillStyle = box.color;
+                ctx.fillRect(box.x - camera.x, box.y, box.width, box.height);
+            }
+            
+            // Draw bullets
+            ctx.fillStyle = '#FFFF00';
+            for (let bullet of bullets) {
+                ctx.fillRect(bullet.x - camera.x, bullet.y, bullet.width, bullet.height);
+            }
+            
+            // Draw enemies
+            for (let enemy of enemies) {
+                enemy.draw(camera.x);
+            }
+            
+            // Draw player
+            player.draw();
+            
+            // Draw score
+            ctx.fillStyle = 'black';
+            ctx.font = '20px Arial';
+            ctx.fillText('Distance: ' + Math.floor(camera.x), 20, 30);
+            ctx.fillText('Score: ' + score, 20, 60);
+        }
+        
+        // Function to draw clouds
+        function drawClouds() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            
+            // Draw fixed clouds (in the background)
+            const clouds = [
+                { x: 100 - (camera.x * 0.1), y: 100, radius: 30 },
+                { x: 300 - (camera.x * 0.1), y: 80, radius: 40 },
+                { x: 500 - (camera.x * 0.1), y: 120, radius: 35 },
+                { x: 700 - (camera.x * 0.1), y: 90, radius: 45 }
+            ];
+            
+            for (let cloud of clouds) {
+                ctx.beginPath();
+                ctx.arc(cloud.x, cloud.y, cloud.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Add some smaller circles to make clouds fluffier
+                ctx.beginPath();
+                ctx.arc(cloud.x + 20, cloud.y - 10, cloud.radius - 10, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.arc(cloud.x - 20, cloud.y, cloud.radius - 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Game over display
+        function showGameOver() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = 'white';
+            ctx.font = '48px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 50);
+            
+            ctx.font = '24px Arial';
+            ctx.fillText('Distance: ' + Math.floor(camera.x), canvas.width / 2, canvas.height / 2);
+            ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 30);
+            
+            ctx.font = '18px Arial';
+            ctx.fillText('Press F5 to restart', canvas.width / 2, canvas.height / 2 + 50);
+        }
+        
+        // Start the game
+        update();
+    </script>
+</body>
+</html>

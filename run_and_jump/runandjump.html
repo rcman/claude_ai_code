@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>BabylonJS 3D Run and Jump Shooting Game</title>
+    <style>
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #uiContainer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            text-shadow: 1px 1px 2px black;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #gameOverContainer {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 36px;
+            text-shadow: 2px 2px 4px black;
+            text-align: center;
+            display: none;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 11;
+        }
+        #restartButton {
+            padding: 10px 20px;
+            margin-top: 20px;
+            font-size: 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            pointer-events: auto; /* Allow clicking */
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px black;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+    <!-- Ensure Babylon.js is loaded first -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <!-- Loaders (optional if not loading external models) -->
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <!-- Physics Engine -->
+    <script src="https://cdn.babylonjs.com/ammo.js"></script>
+    <!-- Sky Material -->
+    <script src="https://cdn.babylonjs.com/materialsLibrary/babylon.skyMaterial.min.js"></script>
+
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="uiContainer">
+        <div>Health: <span id="healthText">100</span></div>
+        <div>Score: <span id="scoreText">0</span></div>
+    </div>
+    <div id="gameOverContainer">
+        <div>Game Over</div>
+        <div>Final Score: <span id="finalScoreText">0</span></div>
+        <button id="restartButton">Restart Game</button>
+    </div>
+    <div id="controls">
+        <div>Controls: A/D to strafe, SPACE to jump, LEFT CLICK to shoot</div>
+    </div>
+
+    <script>
+        window.addEventListener('DOMContentLoaded', async function() {
+            const canvas = document.getElementById('renderCanvas');
+            const engine = new BABYLON.Engine(canvas, true);
+            let score = 0;
+            let gameOver = false;
+
+            // Game variables
+            const playerForwardSpeed = 5; // Constant forward speed along X
+            const playerStrafeSpeed = 4; // Sideways speed along Z
+            const jumpForce = 8;
+            const gravity = -18; // Increased gravity for tighter jumps
+            const playerHealth = 100;
+            const fireRate = 300; // milliseconds between shots
+            const bulletSpeed = 1.5; // Relative speed added to bullet
+            const bulletLifetime = 3000; // Bullet disappears after 3 seconds
+            const enemyBulletSpeed = 10;
+            const enemyBulletLifetime = 4000;
+            const enemyFireRate = 1500; // milliseconds between enemy shots
+            const generationDistance = 150; // How far ahead to generate obstacles/enemies
+            const recycleDistance = 50; // How far behind player to recycle
+
+            // --- AmmoJS Initialization ---
+            await Ammo(); // IMPORTANT: Wait for Ammo to load
+            console.log("AmmoJS loaded");
+
+            // Create the scene
+            const createScene = function() {
+                const scene = new BABYLON.Scene(engine);
+                // Enable Physics using AmmoJSPlugin
+                scene.enablePhysics(new BABYLON.Vector3(0, gravity, 0), new BABYLON.AmmoJSPlugin());
+                console.log("Physics enabled");
+
+                // Setup camera
+                const camera = new BABYLON.FollowCamera("followCamera", new BABYLON.Vector3(0, 5, -10), scene);
+                camera.radius = 18; // Distance from target
+                camera.heightOffset = 6; // Height above target
+                camera.rotationOffset = 0; // Adjust rotation to view from behind along positive X
+                camera.cameraAcceleration = 0.05;
+                camera.maxCameraSpeed = 20;
+                camera.lowerRadiusLimit = 10;
+                camera.upperRadiusLimit = 30;
+                camera.lowerHeightOffsetLimit = 3;
+                camera.upperHeightOffsetLimit = 10;
+
+
+                // Add lighting
+                const hemisphericLight = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+                hemisphericLight.intensity = 0.8;
+
+                const directionalLight = new BABYLON.DirectionalLight("directionalLight", new BABYLON.Vector3(0.5, -1, 0.3), scene);
+                directionalLight.intensity = 0.9;
+                directionalLight.position = new BABYLON.Vector3(-50, 50, -30);
+
+                // Shadow Generator
+                const shadowGenerator = new BABYLON.ShadowGenerator(1024, directionalLight);
+                shadowGenerator.useBlurExponentialShadowMap = true;
+                shadowGenerator.blurKernel = 32;
+
+                // Create ground (make it longer)
+                const ground = BABYLON.MeshBuilder.CreateGround("ground", {width: 50, height: generationDistance * 3}, scene); // Adjust size as needed
+                ground.position.y = -1;
+                ground.receiveShadows = true;
+                const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+                groundMaterial.diffuseColor = new BABYLON.Color3(0.4, 0.6, 0.2);
+                groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                ground.material = groundMaterial;
+
+                // Set up ground physics (Static body)
+                ground.physicsImpostor = new BABYLON.PhysicsImpostor(
+                    ground,
+                    BABYLON.PhysicsImpostor.BoxImpostor,
+                    { mass: 0, restitution: 0.1, friction: 0.8 }, // Increased friction
+                    scene
+                );
+
+                // Create player
+                const player = BABYLON.MeshBuilder.CreateCapsule("player", {height: 1.8, radius: 0.4}, scene);
+                player.position = new BABYLON.Vector3(0, 1, 0); // Start at X=0
+
+                // Player visuals
+                const playerMaterial = new BABYLON.StandardMaterial("playerMaterial", scene);
+                playerMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.4, 0.8);
+                player.material = playerMaterial;
+                shadowGenerator.addShadowCaster(player); // Player casts shadows
+
+                // Set up player physics (Dynamic body)
+                player.physicsImpostor = new BABYLON.PhysicsImpostor(
+                    player,
+                    BABYLON.PhysicsImpostor.CapsuleImpostor, // Use Capsule for better movement
+                    { mass: 1, restitution: 0.1, friction: 0.5 },
+                    scene
+                );
+                // Prevent player capsule from rotating due to physics interactions
+                player.physicsImpostor.physicsBody.setAngularFactor(new Ammo.btVector3(0, 0, 0));
+
+                // Connect camera to player
+                camera.lockedTarget = player;
+
+                // Game state
+                let playerData = {
+                    health: playerHealth,
+                    lastShootTime: 0,
+                };
+
+                // Create Sky
+                const skyMaterial = new BABYLON.SkyMaterial("skyMaterial", scene);
+                skyMaterial.backFaceCulling = false;
+                skyMaterial.turbidity = 10;
+                skyMaterial.luminance = 1;
+                skyMaterial.inclination = 0.3; // Low sun angle
+                skyMaterial.azimuth = 0.25; // Sun position
+                skyMaterial.useSunPosition = true; // Update sun position based on directional light
+                skyMaterial.sunPosition = directionalLight.position;
+
+                const skybox = BABYLON.MeshBuilder.CreateBox("skyBox", {size: 1000.0}, scene);
+                skybox.material = skyMaterial;
+
+
+                // --- Object Pools ---
+                const obstacles = [];
+                const enemies = [];
+                const bullets = [];
+                const enemyBullets = [];
+                let nextObstacleX = 30; // Where to place the next obstacle initially
+                let nextEnemyX = 45; // Where to place the next enemy initially
+
+                // Create obstacle function
+                const createObstacle = function(posX) {
+                    const height = 1 + Math.random() * 3; // Random height between 1 and 4
+                    const width = 1 + Math.random() * 4; // Random width between 1 and 5
+                    const depth = 1 + Math.random() * 4; // Random depth
+
+                    const obstacle = BABYLON.MeshBuilder.CreateBox("obstacle" + obstacles.length, { // Unique name
+                        width: width,
+                        height: height,
+                        depth: depth
+                    }, scene);
+
+                    obstacle.position.x = posX;
+                    obstacle.position.y = height / 2 - 1 + 0.01; // Place on ground
+                    obstacle.position.z = (Math.random() - 0.5) * 15; // Random Z position wider range
+
+                    const obstacleMaterial = new BABYLON.StandardMaterial("obstacleMaterial", scene);
+                    obstacleMaterial.diffuseColor = new BABYLON.Color3(0.6, 0.3, 0.1);
+                    obstacle.material = obstacleMaterial;
+                    obstacle.receiveShadows = true;
+
+                    obstacle.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        obstacle,
+                        BABYLON.PhysicsImpostor.BoxImpostor,
+                        { mass: 0, restitution: 0.1, friction: 0.5 }, // Static obstacle
+                        scene
+                    );
+                    obstacle.isVisible = true; // Ensure visible
+                    obstacles.push(obstacle);
+                    return obstacle;
+                };
+
+                // Create enemy function
+                const createEnemy = function(posX) {
+                    const enemy = BABYLON.MeshBuilder.CreateBox("enemy" + enemies.length, {width: 1, height: 1.8, depth: 1}, scene); // Unique name
+
+                    enemy.position.x = posX;
+                    enemy.position.y = 0.9; // Place on ground
+                    enemy.position.z = (Math.random() - 0.5) * 15; // Random Z position
+
+                    const enemyMaterial = new BABYLON.StandardMaterial("enemyMaterial", scene);
+                    enemyMaterial.diffuseColor = new BABYLON.Color3(0.8, 0.2, 0.2);
+                    enemy.material = enemyMaterial;
+                    shadowGenerator.addShadowCaster(enemy); // Enemy casts shadows
+
+                    // Make enemies kinematic or static if they don't move
+                    enemy.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        enemy,
+                        BABYLON.PhysicsImpostor.BoxImpostor,
+                        { mass: 10, restitution: 0.1, friction: 0.5 }, // Give mass so bullets interact
+                        scene
+                    );
+                     // Prevent enemy from rotating due to physics interactions
+                     enemy.physicsImpostor.physicsBody.setAngularFactor(new Ammo.btVector3(0, 0, 0));
+
+                    enemy.lastShootTime = 0;
+                    enemy.health = 30; // Give enemies health
+                    enemy.isVisible = true; // Ensure visible
+                    enemies.push(enemy);
+                    return enemy;
+                };
+
+                // Pre-populate initial obstacles and enemies
+                for (let i = 0; i < 15; i++) {
+                    createObstacle(nextObstacleX);
+                    nextObstacleX += 15 + Math.random() * 10;
+                    if (Math.random() < 0.6) { // 60% chance to spawn an enemy near an obstacle
+                         createEnemy(nextEnemyX);
+                         nextEnemyX += 20 + Math.random() * 15;
+                    } else {
+                         nextEnemyX += 5 + Math.random() * 5; // Keep enemy spawn points moving forward
+                    }
+                }
+
+
+                // Create a bullet function
+                const createBullet = function(startPosition, direction, speed, lifetime, isEnemy = false) {
+                    const bullet = BABYLON.MeshBuilder.CreateSphere(`bullet_${isEnemy ? 'e' : 'p'}_${Date.now()}`, { diameter: 0.3 }, scene);
+                    bullet.position = startPosition.clone();
+
+                    const bulletMaterial = new BABYLON.StandardMaterial("bulletMaterial" + (isEnemy ? 'E' : 'P'), scene);
+                    bulletMaterial.emissiveColor = isEnemy ? new BABYLON.Color3(1, 0.3, 0.3) : new BABYLON.Color3(0.3, 0.8, 1);
+                    bulletMaterial.disableLighting = true; // Make bullets glow
+                    bullet.material = bulletMaterial;
+
+                    bullet.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        bullet,
+                        BABYLON.PhysicsImpostor.SphereImpostor,
+                        { mass: 0.1, restitution: 0.5, friction: 0.1 },
+                        scene
+                    );
+
+                    // Apply initial impulse - direction should be normalized
+                    const impulse = direction.normalize().scale(speed);
+                     // Ensure the impulse is applied only after the impostor is ready (usually immediate, but safer)
+                    scene.executeWhenReady(() => {
+                        if (bullet.physicsImpostor) { // Check if impostor still exists
+                           bullet.physicsImpostor.applyImpulse(impulse, bullet.getAbsolutePosition());
+                        }
+                    });
+
+
+                    bullet.isEnemyBullet = isEnemy;
+
+                    // Cleanup bullet after lifetime
+                    setTimeout(() => {
+                        if (bullet && !bullet.isDisposed()) { // Check if not already disposed
+                            if (bullet.physicsImpostor) {
+                                bullet.physicsImpostor.dispose();
+                            }
+                            bullet.dispose();
+                            // Remove from appropriate array (important!)
+                            const arr = isEnemy ? enemyBullets : bullets;
+                            const index = arr.indexOf(bullet);
+                            if (index > -1) {
+                                arr.splice(index, 1);
+                            }
+                        }
+                    }, lifetime);
+
+
+                    if (isEnemy) {
+                        enemyBullets.push(bullet);
+                    } else {
+                        bullets.push(bullet);
+                    }
+
+                    // Optional: Add simpler trail effect (less costly than TrailMesh)
+                    // ... (trail code omitted for brevity)
+
+
+                    return bullet;
+                };
+
+                // Keyboard input
+                const inputMap = {};
+                scene.actionManager = new BABYLON.ActionManager(scene);
+
+                scene.actionManager.registerAction(
+                    new BABYLON.ExecuteCodeAction(
+                        BABYLON.ActionManager.OnKeyDownTrigger,
+                        function(evt) {
+                            inputMap[evt.sourceEvent.key.toLowerCase()] = true; // Use lower case
+                        }
+                    )
+                );
+
+                scene.actionManager.registerAction(
+                    new BABYLON.ExecuteCodeAction(
+                        BABYLON.ActionManager.OnKeyUpTrigger,
+                        function(evt) {
+                            inputMap[evt.sourceEvent.key.toLowerCase()] = false; // Use lower case
+                        }
+                    )
+                );
+
+                // Mouse input for shooting
+                let isPointerDown = false;
+                scene.onPointerObservable.add((pointerInfo) => {
+                    switch (pointerInfo.type) {
+                        case BABYLON.PointerEventTypes.POINTERDOWN:
+                             if (pointerInfo.event.button === 0) { // Check for left mouse button
+                                isPointerDown = true;
+                             }
+                            break;
+                        case BABYLON.PointerEventTypes.POINTERUP:
+                             if (pointerInfo.event.button === 0) { // Check for left mouse button
+                                isPointerDown = false;
+                             }
+                            break;
+                    }
+                });
+
+
+                // Function to handle player shooting
+                const playerShoot = function() {
+                    const currentTime = Date.now();
+                    if (currentTime - playerData.lastShootTime > fireRate && !gameOver) {
+                        playerData.lastShootTime = currentTime;
+
+                        // Create bullet position slightly in front and above center of player
+                        const bulletStartPos = player.getAbsolutePosition().add(new BABYLON.Vector3(0.5, 0.2, 0)); // Adjust Y offset
+
+                        // Direction is primarily forward (X), add slight spread maybe later
+                        const direction = new BABYLON.Vector3(1, 0, 0); // Forward relative to world
+
+                        createBullet(bulletStartPos, direction, bulletSpeed, bulletLifetime, false);
+                    }
+                };
+
+                // Function to handle enemy shooting
+                const enemyShoot = function(enemy) {
+                    const currentTime = Date.now();
+                    // Ensure enemy still exists and has an impostor before trying to shoot
+                    if (enemy && !enemy.isDisposed() && enemy.physicsImpostor && currentTime - enemy.lastShootTime > enemyFireRate && !gameOver) {
+                        enemy.lastShootTime = currentTime;
+
+                        const bulletStartPos = enemy.getAbsolutePosition().add(new BABYLON.Vector3(0, 0.5, 0)); // Center of enemy
+
+                        // Direction towards the player - Calculate accurately
+                        const direction = player.getAbsolutePosition().subtract(bulletStartPos).normalize();
+
+                        createBullet(bulletStartPos, direction, enemyBulletSpeed, enemyBulletLifetime, true);
+                    }
+                };
+
+                // Check if player is on ground using physics raycast
+                 const isOnGround = function() {
+                    if (!player || player.isDisposed() || !player.physicsImpostor) return false; // Check if player exists
+                    // Ray starts slightly inside the player capsule base and goes down
+                    const rayStart = player.getAbsolutePosition().add(new BABYLON.Vector3(0, -0.8, 0));
+                    const rayEnd = player.getAbsolutePosition().add(new BABYLON.Vector3(0, -1.1, 0)); // Check just below feet
+                    const ray = new BABYLON.Ray(rayStart, rayEnd.subtract(rayStart), 0.31); // Short ray down
+
+                    // For debugging: show the ray
+                    // BABYLON.RayHelper.CreateAndShow(ray, scene, new BABYLON.Color3(1, 1, 0.1));
+
+                    const hit = scene.pickWithRay(ray, (mesh) => {
+                        // Only collide with ground or obstacles, not player or bullets or disposed meshes
+                        return mesh && !mesh.isDisposed() && (mesh.name.startsWith("ground") || mesh.name.startsWith("obstacle")); // Use startsWith for safety
+                    });
+
+                    return hit.hit;
+                };
+
+                // Update health display
+                const updateHealthDisplay = function() {
+                    document.getElementById('healthText').textContent = Math.max(0, playerData.health);
+                };
+
+                // Update score display
+                const updateScoreDisplay = function() {
+                    document.getElementById('scoreText').textContent = score;
+                };
+
+                // Show game over
+                const showGameOver = function() {
+                    if (gameOver) return; // Prevent multiple calls
+                    gameOver = true;
+                    if (player && !player.isDisposed() && player.physicsImpostor) { // Check if impostor exists
+                         player.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero()); // Stop player
+                         player.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
+                    }
+                    document.getElementById('finalScoreText').textContent = score;
+                    document.getElementById('gameOverContainer').style.display = 'block';
+                    console.log("Game Over");
+                };
+
+                // Restart game
+                document.getElementById('restartButton').addEventListener('click', function() {
+                    window.location.reload(); // Simple reload for restart
+                });
+
+                // Collision Handling Setup - Use a map to avoid duplicate registrations
+                const collisionPairs = new Map();
+
+                const registerCollisionCallback = (impostor1, impostor2, callback) => {
+                     // Ensure both impostors exist and have the observable ready
+                     if (!impostor1 || !impostor1.onPhysicsCollideObservable || !impostor2 || !impostor2.onPhysicsCollideObservable) {
+                        // console.warn("Skipping collision registration: Impostor or observable missing.", impostor1?.object?.name, impostor2?.object?.name);
+                        return;
+                     }
+
+                     // Create a unique key for the pair, order independent
+                     const key = impostor1.uniqueId < impostor2.uniqueId
+                         ? `${impostor1.uniqueId}-${impostor2.uniqueId}`
+                         : `${impostor2.uniqueId}-${impostor1.uniqueId}`;
+
+                     // Only register if this pair hasn't been registered before
+                     if (!collisionPairs.has(key)) {
+                         // console.log(`Registering collision pair: ${impostor1.object.name} <-> ${impostor2.object.name} (Key: ${key})`);
+                         try {
+                             const observable = impostor1.onPhysicsCollideObservable.add((collidedWith, contact) => {
+                                 // Check if the collision is with the intended partner and objects still exist
+                                 if (collidedWith === impostor2 && !impostor1.object.isDisposed() && !impostor2.object.isDisposed()) {
+                                    callback(impostor1.object, impostor2.object, contact);
+                                 }
+                             });
+                             // Also need to register the reverse observation
+                             const observableReverse = impostor2.onPhysicsCollideObservable.add((collidedWith, contact) => {
+                                  if (collidedWith === impostor1 && !impostor1.object.isDisposed() && !impostor2.object.isDisposed()) {
+                                     callback(impostor2.object, impostor1.object, contact);
+                                  }
+                             });
+
+                             // Store the observables to potentially remove later if needed
+                             collisionPairs.set(key, { obs1: observable, obs2: observableReverse });
+
+                         } catch (error) {
+                             console.error(`Error adding collision observable for ${impostor1.object.name} / ${impostor2.object.name}:`, error);
+                         }
+                     }
+                };
+
+
+                // Collision Callbacks Setup (Call this when new objects might need listeners)
+                const setupCollisions = () => {
+                    // console.log("Running setupCollisions...");
+
+                    // --- Player Bullet Collisions ---
+                    bullets.forEach(bullet => {
+                        if (!bullet || bullet.isDisposed() || !bullet.physicsImpostor || bullet.isEnemyBullet) return;
+
+                        // Bullet -> Enemy
+                        enemies.forEach(enemy => {
+                             if (enemy && !enemy.isDisposed() && enemy.physicsImpostor) {
+                                registerCollisionCallback(bullet.physicsImpostor, enemy.physicsImpostor, (bulletMesh, enemyMesh) => {
+                                    if (gameOver) return; // Don't process hits after game over
+                                    console.log("Player bullet hit enemy:", enemyMesh.name);
+
+                                    // Damage enemy
+                                    enemyMesh.health -= 10; // Example damage
+                                    if (enemyMesh.health <= 0) {
+                                        score += 50;
+                                        updateScoreDisplay();
+                                        recycleEnemy(enemyMesh); // Recycle handles disposal/removal
+                                    }
+
+                                    // Remove bullet immediately
+                                    const bulletIndex = bullets.indexOf(bulletMesh);
+                                    if(bulletIndex > -1) bullets.splice(bulletIndex, 1);
+                                    bulletMesh.physicsImpostor?.dispose(); // Safe disposal
+                                    bulletMesh.dispose();
+                                });
+                            }
+                        });
+
+                        // Bullet -> Obstacle
+                         obstacles.forEach(obstacle => {
+                            if (obstacle && !obstacle.isDisposed() && obstacle.physicsImpostor) {
+                                registerCollisionCallback(bullet.physicsImpostor, obstacle.physicsImpostor, (bulletMesh, obstacleMesh) => {
+                                     console.log("Player bullet hit obstacle");
+                                    // Remove bullet
+                                    const bulletIndex = bullets.indexOf(bulletMesh);
+                                    if(bulletIndex > -1) bullets.splice(bulletIndex, 1);
+                                     bulletMesh.physicsImpostor?.dispose();
+                                     bulletMesh.dispose();
+                                });
+                            }
+                         });
+                    });
+
+                    // --- Enemy Bullet Collisions ---
+                    enemyBullets.forEach(bullet => {
+                        if (!bullet || bullet.isDisposed() || !bullet.physicsImpostor || !bullet.isEnemyBullet) return;
+
+                        // Enemy Bullet -> Player
+                        if (player && !player.isDisposed() && player.physicsImpostor) {
+                             registerCollisionCallback(bullet.physicsImpostor, player.physicsImpostor, (bulletMesh, playerMesh) => {
+                                 if (gameOver) return; // Don't process hits after game over
+                                 console.log("Enemy bullet hit player");
+
+                                 playerData.health -= 10;
+                                 updateHealthDisplay();
+                                 if (playerData.health <= 0) {
+                                     showGameOver();
+                                 }
+
+                                 // Remove bullet
+                                 const bulletIndex = enemyBullets.indexOf(bulletMesh);
+                                 if(bulletIndex > -1) enemyBullets.splice(bulletIndex, 1);
+                                 bulletMesh.physicsImpostor?.dispose();
+                                 bulletMesh.dispose();
+                            });
+                        }
+
+                         // Enemy Bullet -> Obstacle
+                         obstacles.forEach(obstacle => {
+                             if (obstacle && !obstacle.isDisposed() && obstacle.physicsImpostor) {
+                                 registerCollisionCallback(bullet.physicsImpostor, obstacle.physicsImpostor, (bulletMesh, obstacleMesh) => {
+                                      console.log("Enemy bullet hit obstacle");
+                                     // Remove bullet
+                                     const bulletIndex = enemyBullets.indexOf(bulletMesh);
+                                     if(bulletIndex > -1) enemyBullets.splice(bulletIndex, 1);
+                                     bulletMesh.physicsImpostor?.dispose();
+                                     bulletMesh.dispose();
+                                 });
+                             }
+                         });
+                    });
+
+
+                    // --- Player Collisions (Physics engine handles response, these are for logic) ---
+                     if (player && !player.isDisposed() && player.physicsImpostor) {
+                        // Player -> Obstacle
+                         obstacles.forEach(obstacle => {
+                             if(obstacle && !obstacle.isDisposed() && obstacle.physicsImpostor) {
+                                 registerCollisionCallback(player.physicsImpostor, obstacle.physicsImpostor, (playerMesh, obstacleMesh) => {
+                                     // Optional: apply damage on collision, slow down etc.
+                                     // console.log("Player hit obstacle:", obstacleMesh.name);
+                                 });
+                             }
+                         });
+
+                        // Player -> Enemy
+                         enemies.forEach(enemy => {
+                             if(enemy && !enemy.isDisposed() && enemy.physicsImpostor) {
+                                 registerCollisionCallback(player.physicsImpostor, enemy.physicsImpostor, (playerMesh, enemyMesh) => {
+                                     // Optional: apply damage on collision
+                                     // console.log("Player hit enemy:", enemyMesh.name);
+                                     // Could damage player:
+                                     // if (!gameOver) {
+                                     //     playerData.health -= 5; updateHealthDisplay(); if (playerData.health <= 0) showGameOver();
+                                     // }
+                                 });
+                             }
+                         });
+                    }
+                };
+
+                // --- Recycling Functions ---
+                const recycleObstacle = (obstacle) => {
+                    if (!obstacle || obstacle.isDisposed()) return; // Safety check
+                    // Move far ahead
+                    obstacle.position.x = player.position.x + generationDistance + Math.random() * 50;
+                    obstacle.position.z = (Math.random() - 0.5) * 15;
+                    // Reset physics state for static object (usually not needed, but safe)
+                    obstacle.physicsImpostor?.setLinearVelocity(BABYLON.Vector3.Zero());
+                    obstacle.physicsImpostor?.setAngularVelocity(BABYLON.Vector3.Zero());
+                    // console.log(`Recycled obstacle ${obstacle.name} to X: ${obstacle.position.x.toFixed(1)}`);
+                };
+
+                 const recycleEnemy = (enemy) => {
+                     if (!enemy || enemy.isDisposed()) return; // Safety check
+
+                     // Find and remove from the active list *before* potentially async disposal
+                     const index = enemies.indexOf(enemy);
+                     if (index > -1) {
+                         enemies.splice(index, 1);
+                     } else {
+                         console.warn("Trying to recycle enemy not in list:", enemy.name);
+                         enemy.physicsImpostor?.dispose(); // Attempt cleanup
+                         enemy.dispose();
+                         return; // Exit if not found
+                     }
+
+                     // console.log(`Recycling enemy: ${enemy.name}`);
+                     // Clean up collision map entries involving this enemy
+                     // Note: This simple cleanup might not catch all pairs if IDs were reused,
+                     // but helps prevent stale references.
+                     const enemyImpostorId = enemy.physicsImpostor?.uniqueId;
+                     if (enemyImpostorId) {
+                        for (let [key, value] of collisionPairs.entries()) {
+                            if (key.includes(enemyImpostorId)) {
+                                // In a more complex system, you might remove observers here:
+                                // value.obs1?.remove();
+                                // value.obs2?.remove();
+                                collisionPairs.delete(key);
+                                // console.log(`Removed collision pair with key: ${key}`);
+                            }
+                        }
+                     }
+
+
+                     // Dispose physics impostor first
+                     if (enemy.physicsImpostor) {
+                         enemy.physicsImpostor.dispose();
+                         enemy.physicsImpostor = null; // Clear reference
+                     }
+                     // Dispose the mesh
+                     enemy.dispose();
+
+                     // Immediately create a new enemy far ahead to replace it
+                     const newPosX = player.position.x + generationDistance + Math.random() * 50;
+                     const newEnemy = createEnemy(newPosX); // createEnemy adds to 'enemies' list and sets up physics
+                     // console.log(`Recreated enemy ${newEnemy.name} at X: ${newPosX.toFixed(1)}`);
+
+                     // IMPORTANT: Re-run setupCollisions to register listeners for the new enemy
+                     // and potentially update listeners for existing bullets/player.
+                     setupCollisions();
+                 };
+
+
+                // --- Main Game Loop ---
+                let lastPlayerX = player.position.x;
+                scene.registerBeforeRender(function() {
+                    if (gameOver) {
+                        return;
+                    }
+
+                    // Ensure player and impostor exist
+                    if (!player || player.isDisposed() || !player.physicsImpostor) {
+                        if (!gameOver) showGameOver(); // If player gone unexpectedly, game over
+                        return;
+                    }
+
+
+                    const currentVelocity = player.physicsImpostor.getLinearVelocity();
+                    // Preserve Y velocity (gravity), set X/Z based on input/constants
+                    let targetVelocity = new BABYLON.Vector3(playerForwardSpeed, currentVelocity.y, 0);
+
+                    // Player Strafe Input (A/D for Z-axis)
+                    if (inputMap["a"]) { // Strafe Left (+Z)
+                        targetVelocity.z = playerStrafeSpeed;
+                    } else if (inputMap["d"]) { // Strafe Right (-Z)
+                        targetVelocity.z = -playerStrafeSpeed;
+                    } else {
+                        targetVelocity.z = 0; // No strafe input
+                    }
+
+                    // Apply calculated velocity
+                    player.physicsImpostor.setLinearVelocity(targetVelocity);
+
+                    // Jump Input (Space)
+                    if (inputMap[" "] && isOnGround()) {
+                         // console.log("Jump!");
+                        // Apply impulse from the center of mass (absolute position)
+                        player.physicsImpostor.applyImpulse(new BABYLON.Vector3(0, jumpForce, 0), player.getAbsolutePosition());
+                    }
+
+                    // Shoot Input (Mouse Click)
+                    if (isPointerDown) {
+                        playerShoot();
+                    }
+
+
+                    // --- Object Management ---
+                    const playerPosX = player.position.x;
+
+                    // Recycle/Manage Obstacles
+                    for (let i = obstacles.length - 1; i >= 0; i--) {
+                        const obstacle = obstacles[i];
+                        // Check if obstacle exists and is behind recycle distance
+                        if (obstacle && !obstacle.isDisposed() && obstacle.position.x < playerPosX - recycleDistance) {
+                            recycleObstacle(obstacle);
+                            score += 10; // Score for passing obstacle
+                            updateScoreDisplay();
+                        }
+                    }
+
+                    // Recycle/Manage Enemies
+                     for (let i = enemies.length - 1; i >= 0; i--) {
+                         const enemy = enemies[i];
+                         if (!enemy || enemy.isDisposed()) continue; // Skip if already gone
+
+                         // Recycle if far behind
+                         if (enemy.position.x < playerPosX - recycleDistance) {
+                             recycleEnemy(enemy); // Recycle handles replacement and removal
+                              score += 20; // Score for passing enemy
+                             updateScoreDisplay();
+                         } else {
+                            // Enemy Logic (Shooting) only if visible/relevant
+                             const distToPlayer = BABYLON.Vector3.Distance(enemy.position, player.position);
+                             // Check if enemy is ahead and within range
+                             if (distToPlayer < 40 && enemy.position.x > player.position.x + 1) { // Ensure slightly ahead
+                                 // Simple Line of Sight Check (optional enhancement)
+                                 const ray = new BABYLON.Ray(enemy.getAbsolutePosition().add(new BABYLON.Vector3(0,0.5,0)), // Start from enemy center
+                                                             player.getAbsolutePosition().subtract(enemy.getAbsolutePosition()).normalize(), // Direction to player
+                                                             distToPlayer); // Max distance
+                                 const hit = scene.pickWithRay(ray, (mesh) => {
+                                     // Check against obstacles only, ignore self, player, bullets
+                                     return mesh && !mesh.isDisposed() && mesh.name.startsWith("obstacle");
+                                 });
+
+                                 // If no hit or hit is further than player, line of sight is clear
+                                 if (!hit.hit || hit.distance > distToPlayer - 2) { // Allow shooting if obstacle is very close to player
+                                     enemyShoot(enemy);
+                                 }
+                             }
+                         }
+                     }
+
+                     // Move Ground Texture (Illusion of infinite ground) - Needs a repeatable texture
+                     // if (groundMaterial.diffuseTexture) {
+                     //    groundMaterial.diffuseTexture.uOffset += 0.005 * scene.getAnimationRatio();
+                     // }
+
+
+                     // --- Check Player Fall ---
+                     if (player.position.y < -10) {
+                         console.log("Player fell");
+                         playerData.health = 0;
+                         updateHealthDisplay();
+                         showGameOver();
+                     }
+
+                     // --- Boundary Limits (Optional, adjust as needed) ---
+                     const boundaryZ = 20; // How far sideways player can go
+                     if (player.position.z > boundaryZ) {
+                        player.position.z = boundaryZ;
+                        player.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(player.physicsImpostor.getLinearVelocity().x, player.physicsImpostor.getLinearVelocity().y, 0)); // Stop Z movement
+                     }
+                     if (player.position.z < -boundaryZ) {
+                        player.position.z = -boundaryZ;
+                         player.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(player.physicsImpostor.getLinearVelocity().x, player.physicsImpostor.getLinearVelocity().y, 0)); // Stop Z movement
+                     }
+
+
+                     // --- Dynamic Object Generation (Check periodically based on distance) ---
+                     if (playerPosX > lastPlayerX + 50) { // Check every 50 units moved forward
+                         lastPlayerX = playerPosX;
+                         // console.log("Checking generation...");
+
+                          // Generate new obstacles if needed to maintain density ahead
+                         let currentObstacleCountAhead = obstacles.filter(o => !o.isDisposed() && o.position.x > playerPosX).length;
+                         if (currentObstacleCountAhead < 10) { // Target density
+                             let needed = 10 - currentObstacleCountAhead;
+                             // console.log(`Generating ${needed} new obstacles...`);
+                             for(let i = 0; i < needed; i++) {
+                                 createObstacle(nextObstacleX);
+                                  nextObstacleX += 15 + Math.random() * 10;
+                             }
+                         } else {
+                            // Ensure next spawn point is still ahead even if not spawning now
+                            nextObstacleX = Math.max(nextObstacleX, playerPosX + generationDistance);
+                         }
+
+                         // Generate new enemies if needed
+                         let currentEnemyCountAhead = enemies.filter(e => !e.isDisposed() && e.position.x > playerPosX).length;
+                         if (currentEnemyCountAhead < 5) { // Target density
+                             let needed = 5 - currentEnemyCountAhead;
+                              // console.log(`Generating ${needed} new enemies...`);
+                             for(let i = 0; i < needed; i++) {
+                                if (Math.random() < 0.7) { // 70% chance
+                                    createEnemy(nextEnemyX); // This now calls setupCollisions internally via recycleEnemy
+                                    nextEnemyX += 20 + Math.random() * 15;
+                                } else {
+                                    nextEnemyX += 10 + Math.random() * 5; // Advance anyway
+                                }
+                             }
+                             // setupCollisions(); // Call setupCollisions *after* potentially creating multiple enemies
+                         } else {
+                            nextEnemyX = Math.max(nextEnemyX, playerPosX + generationDistance + 10); // Ensure next spawn is ahead
+                         }
+                        // No need to call setupCollisions here if createEnemy calls it via recycling logic
+                     } // End dynamic generation check
+
+                }); // End registerBeforeRender
+
+
+                 // *** CORRECTED INITIAL COLLISION SETUP ***
+                 // Setup collisions only after the scene is fully ready
+                 scene.onReadyObservable.addOnce(() => {
+                     console.log("Scene is ready. Setting up initial collisions.");
+                     setupCollisions();
+                 });
+
+
+                return scene;
+            }; // End createScene
+
+            // --- Start the Game ---
+            try {
+                const scene = createScene();
+
+                engine.runRenderLoop(function() {
+                    if (scene && !scene.isDisposed) { // Check if scene is valid
+                        scene.render();
+                    }
+                });
+
+                window.addEventListener('resize', function() {
+                    engine.resize();
+                });
+            } catch (error) {
+                console.error("Error initializing the game:", error);
+                // Display error to user?
+                document.body.innerHTML = `<div style="color: red; font-family: sans-serif; padding: 20px;">
+                    <h2>Error loading game</h2>
+                    <p>Could not initialize the 3D scene. Please check the console (F12) for details.</p>
+                    <pre>${error.stack || error}</pre>
+                    </div>`;
+            }
+
+
+        }); // End DOMContentLoaded listener
+    </script>
+</body>
+</html>

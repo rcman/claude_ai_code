@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Road Rage Racing</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background-color: #222;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background-color: #111;
+        }
+        #game-container {
+            position: relative;
+            width: 800px;
+            margin: 20px auto;
+        }
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 18px;
+            text-shadow: 1px 1px 2px black;
+        }
+        h1 {
+            text-align: center;
+            color: #f0f0f0;
+            text-shadow: 0 0 10px #ff6600;
+        }
+        #start-screen, #game-over-screen, #level-complete-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 10;
+        }
+        button {
+            background-color: #ff6600;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 20px;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #ff8800;
+        }
+        #controls {
+            margin: 20px auto;
+            width: 800px;
+            color: #aaa;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>ROAD RAGE RACING</h1>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="hud">
+            <div>Time Left: <span id="timer">60</span> sec</div>
+            <div>Distance: <span id="distance">0</span>m / <span id="checkpoint-distance">3000</span>m</div>
+            <div>Speed: <span id="speed">0</span> km/h</div>
+            <div>Ammo: <span id="ammo">10</span></div>
+        </div>
+        <div id="start-screen">
+            <h2>Road Rage Racing</h2>
+            <p>Drive to the checkpoint before time runs out!</p>
+            <p>Watch out for enemy cars trying to knock you off the road.</p>
+            <p>Use SPACE to shoot enemies.</p>
+            <button id="start-button">START GAME</button>
+        </div>
+        <div id="game-over-screen" style="display: none;">
+            <h2>GAME OVER</h2>
+            <p>You ran out of time!</p>
+            <button id="restart-button">TRY AGAIN</button>
+        </div>
+        <div id="level-complete-screen" style="display: none;">
+            <h2>CHECKPOINT REACHED!</h2>
+            <p>Well done! Ready for the next section?</p>
+            <button id="next-level-button">CONTINUE</button>
+        </div>
+    </div>
+    <div id="controls">
+        <p>Controls: Arrow keys to drive, SPACE to shoot</p>
+    </div>
+
+    <script>
+        // Game constants
+        const GAME_WIDTH = 800;
+        const GAME_HEIGHT = 600;
+        const ROAD_WIDTH = 400;
+        const LANE_COUNT = 3;
+        const LANE_WIDTH = ROAD_WIDTH / LANE_COUNT;
+        const ROAD_EDGE_LEFT = (GAME_WIDTH - ROAD_WIDTH) / 2;
+        const ROAD_EDGE_RIGHT = ROAD_EDGE_LEFT + ROAD_WIDTH;
+        const PLAYER_WIDTH = 40;
+        const PLAYER_HEIGHT = 70;
+        const ENEMY_WIDTH = 40;
+        const ENEMY_HEIGHT = 70;
+        const BULLET_WIDTH = 5;
+        const BULLET_HEIGHT = 15;
+        const ROAD_SPEED = 5;
+        const CHECKPOINT_DISTANCE = 3000; // Increased distance to checkpoint
+        const TIME_LIMIT = 60; // Time limit in seconds to reach checkpoint
+        const STARTING_AMMO = 10;
+        const AMMO_RESPAWN_TIME = 10000; // 10 seconds
+
+        // Game variables
+        let canvas, ctx;
+        let gameRunning = false;
+        let gameLoop;
+        let roadOffset = 0;
+        let player;
+        let enemies = [];
+        let bullets = [];
+        let timer = TIME_LIMIT;
+        let distance = 0;
+        let lastTimerUpdate = 0;
+        let ammo = STARTING_AMMO;
+        let lastAmmoPickup = Date.now();
+        let checkpointReached = false;
+        let level = 1;
+
+        // Load game assets
+        const carImg = new Image();
+        carImg.src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI3MCIgdmlld0JveD0iMCAwIDQwIDcwIj48cmVjdCB4PSI1IiB5PSI1IiB3aWR0aD0iMzAiIGhlaWdodD0iNjAiIHJ4PSI1IiByeT0iNSIgZmlsbD0iI2YwMCIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cmVjdCB4PSIxMCIgeT0iMTUiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgZmlsbD0iIzAwOCIvPjxyZWN0IHg9IjEwIiB5PSI0NSIgd2lkdGg9IjIwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjZmZmIi8+PHJlY3QgeD0iNSIgeT0iMTAiIHdpZHRoPSIzIiBoZWlnaHQ9IjEwIiBmaWxsPSIjZmYwIi8+PHJlY3QgeD0iMzIiIHk9IjEwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iI2ZmMCIvPjxyZWN0IHg9IjUiIHk9IjUwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iI2YwMCIvPjxyZWN0IHg9IjMyIiB5PSI1MCIgd2lkdGg9IjMiIGhlaWdodD0iMTAiIGZpbGw9IiNmMDAiLz48L3N2Zz4=";
+        
+        const enemyImg = new Image();
+        enemyImg.src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI3MCIgdmlld0JveD0iMCAwIDQwIDcwIj48cmVjdCB4PSI1IiB5PSI1IiB3aWR0aD0iMzAiIGhlaWdodD0iNjAiIHJ4PSI1IiByeT0iNSIgZmlsbD0iIzQ0NCIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cmVjdCB4PSIxMCIgeT0iMTUiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjEwIiB5PSI0NSIgd2lkdGg9IjIwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjYWFhIi8+PHJlY3QgeD0iNSIgeT0iMTAiIHdpZHRoPSIzIiBoZWlnaHQ9IjEwIiBmaWxsPSIjZmYwIi8+PHJlY3QgeD0iMzIiIHk9IjEwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iI2ZmMCIvPjxyZWN0IHg9IjUiIHk9IjUwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iI2YwMCIvPjxyZWN0IHg9IjMyIiB5PSI1MCIgd2lkdGg9IjMiIGhlaWdodD0iMTAiIGZpbGw9IiNmMDAiLz48L3N2Zz4=";
+        
+        const disabledEnemyImg = new Image();
+        disabledEnemyImg.src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI3MCIgdmlld0JveD0iMCAwIDQwIDcwIj48cmVjdCB4PSI1IiB5PSI1IiB3aWR0aD0iMzAiIGhlaWdodD0iNjAiIHJ4PSI1IiByeT0iNSIgZmlsbD0iIzc3NyIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cmVjdCB4PSIxMCIgeT0iMTUiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgZmlsbD0iIzAwMCIvPjxyZWN0IHg9IjEwIiB5PSI0NSIgd2lkdGg9IjIwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjYWFhIi8+PHJlY3QgeD0iNSIgeT0iMTAiIHdpZHRoPSIzIiBoZWlnaHQ9IjEwIiBmaWxsPSIjNzc3Ii8+PHJlY3QgeD0iMzIiIHk9IjEwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iIzc3NyIvPjxyZWN0IHg9IjUiIHk9IjUwIiB3aWR0aD0iMyIgaGVpZ2h0PSIxMCIgZmlsbD0iIzc3NyIvPjxyZWN0IHg9IjMyIiB5PSI1MCIgd2lkdGg9IjMiIGhlaWdodD0iMTAiIGZpbGw9IiM3NzciLz48dGV4dCB4PSIyMCIgeT0iMzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNmZmYiIGZvbnQtc2l6ZT0iMTYiIGZvbnQtd2VpZ2h0PSJib2xkIj5YPC90ZXh0Pjwvc3ZnPg==";
+        
+        const ammoImg = new Image();
+        ammoImg.src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMCIgaGVpZ2h0PSIzMCIgdmlld0JveD0iMCAwIDMwIDMwIj48cmVjdCB4PSI1IiB5PSI1IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIGZpbGw9IiNmZmY1MDAiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIyIi8+PHRleHQgeD0iMTUiIHk9IjIwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMDAwIiBmb250LXNpemU9IjE0IiBmb250LXdlaWdodD0iYm9sZCI+QTwvdGV4dD48L3N2Zz4=";
+
+        // Game classes
+        class Player {
+            constructor() {
+                this.width = PLAYER_WIDTH;
+                this.height = PLAYER_HEIGHT;
+                this.x = GAME_WIDTH / 2 - this.width / 2;
+                this.y = GAME_HEIGHT - this.height - 30;
+                this.speed = 5;
+                this.xSpeed = 0;
+                this.ySpeed = 0;
+                this.maxSpeed = 10;
+                this.acceleration = 0.2;
+                this.friction = 0.9;
+            }
+
+            update() {
+                // Apply movement
+                this.x += this.xSpeed;
+                this.y += this.ySpeed;
+                
+                // Apply friction
+                this.xSpeed *= this.friction;
+                this.ySpeed *= this.friction;
+                
+                // Check boundaries
+                if (this.x < 0) this.x = 0;
+                if (this.x > GAME_WIDTH - this.width) this.x = GAME_WIDTH - this.width;
+                if (this.y < 0) this.y = 0;
+                if (this.y > GAME_HEIGHT - this.height) this.y = GAME_HEIGHT - this.height;
+            }
+
+            draw() {
+                ctx.drawImage(carImg, this.x, this.y, this.width, this.height);
+            }
+
+            shoot() {
+                if (ammo > 0) {
+                    bullets.push(new Bullet(this.x + this.width / 2 - BULLET_WIDTH / 2, this.y));
+                    ammo--;
+                    document.getElementById("ammo").textContent = ammo;
+                }
+            }
+        }
+
+        class Enemy {
+            constructor(lane) {
+                this.width = ENEMY_WIDTH;
+                this.height = ENEMY_HEIGHT;
+                this.lane = lane;
+                this.x = ROAD_EDGE_LEFT + (lane * LANE_WIDTH) + (LANE_WIDTH / 2) - (this.width / 2);
+                this.y = -this.height;
+                this.speed = 2 + Math.random() * 2;
+                this.disabled = false;
+                this.aggressiveness = 0.01 + (Math.random() * 0.04 * level);
+                this.targetPlayer = false;
+                this.xSpeed = 0;
+            }
+
+            update() {
+                // Move down
+                this.y += this.speed;
+                
+                if (!this.disabled) {
+                    // Random chance to target player
+                    if (Math.random() < this.aggressiveness && !this.targetPlayer) {
+                        this.targetPlayer = true;
+                    }
+                    
+                    // Move towards player if targeting
+                    if (this.targetPlayer) {
+                        if (player.x + player.width / 2 < this.x + this.width / 2) {
+                            this.xSpeed = -1.5;
+                        } else if (player.x + player.width / 2 > this.x + this.width / 2) {
+                            this.xSpeed = 1.5;
+                        }
+                    }
+                    
+                    this.x += this.xSpeed;
+                    
+                    // Keep within road
+                    if (this.x < ROAD_EDGE_LEFT) {
+                        this.x = ROAD_EDGE_LEFT;
+                        this.xSpeed = 0;
+                        this.targetPlayer = false;
+                    }
+                    if (this.x > ROAD_EDGE_RIGHT - this.width) {
+                        this.x = ROAD_EDGE_RIGHT - this.width;
+                        this.xSpeed = 0;
+                        this.targetPlayer = false;
+                    }
+                    
+                    // Check collision with player
+                    if (this.collidesWith(player)) {
+                        // Push player to the side
+                        if (this.x + this.width / 2 < player.x + player.width / 2) {
+                            player.xSpeed = 3;
+                        } else {
+                            player.xSpeed = -3;
+                        }
+                        this.targetPlayer = false;
+                    }
+                }
+                
+                // Remove if off-screen
+                return this.y > GAME_HEIGHT;
+            }
+
+            draw() {
+                ctx.drawImage(this.disabled ? disabledEnemyImg : enemyImg, this.x, this.y, this.width, this.height);
+            }
+
+            collidesWith(obj) {
+                return this.x < obj.x + obj.width &&
+                       this.x + this.width > obj.x &&
+                       this.y < obj.y + obj.height &&
+                       this.y + this.height > obj.y;
+            }
+            
+            disable() {
+                this.disabled = true;
+                this.speed = 1;
+                this.targetPlayer = false;
+                this.xSpeed = 0;
+            }
+        }
+
+        class Bullet {
+            constructor(x, y) {
+                this.width = BULLET_WIDTH;
+                this.height = BULLET_HEIGHT;
+                this.x = x;
+                this.y = y;
+                this.speed = 10;
+            }
+
+            update() {
+                this.y -= this.speed;
+                
+                // Check collision with enemies
+                for (let i = 0; i < enemies.length; i++) {
+                    if (!enemies[i].disabled && this.collidesWith(enemies[i])) {
+                        enemies[i].disable();
+                        return true; // Remove bullet
+                    }
+                }
+                
+                // Remove if off-screen
+                return this.y < -this.height;
+            }
+
+            draw() {
+                ctx.fillStyle = "#ff0";
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+            }
+
+            collidesWith(obj) {
+                return this.x < obj.x + obj.width &&
+                       this.x + this.width > obj.x &&
+                       this.y < obj.y + obj.height &&
+                       this.y + this.height > obj.y;
+            }
+        }
+
+        class AmmoPowerup {
+            constructor() {
+                this.width = 30;
+                this.height = 30;
+                this.x = ROAD_EDGE_LEFT + Math.random() * (ROAD_WIDTH - this.width);
+                this.y = -this.height;
+                this.speed = 3;
+            }
+
+            update() {
+                this.y += this.speed;
+                
+                // Check collision with player
+                if (this.collidesWith(player)) {
+                    ammo += 5;
+                    document.getElementById("ammo").textContent = ammo;
+                    lastAmmoPickup = Date.now();
+                    return true; // Remove powerup
+                }
+                
+                // Remove if off-screen
+                return this.y > GAME_HEIGHT;
+            }
+
+            draw() {
+                ctx.drawImage(ammoImg, this.x, this.y, this.width, this.height);
+            }
+
+            collidesWith(obj) {
+                return this.x < obj.x + obj.width &&
+                       this.x + this.width > obj.x &&
+                       this.y < obj.y + obj.height &&
+                       this.y + this.height > obj.y;
+            }
+        }
+
+        // Game objects
+        let ammoPowerups = [];
+
+        // Initialize game
+        function init() {
+            canvas = document.getElementById("gameCanvas");
+            ctx = canvas.getContext("2d");
+            
+            // Set up event listeners
+            document.getElementById("start-button").addEventListener("click", startGame);
+            document.getElementById("restart-button").addEventListener("click", startGame);
+            document.getElementById("next-level-button").addEventListener("click", nextLevel);
+            
+            // Show start screen
+            document.getElementById("start-screen").style.display = "block";
+            document.getElementById("game-over-screen").style.display = "none";
+            document.getElementById("level-complete-screen").style.display = "none";
+            
+            // Draw initial road
+            drawRoad();
+        }
+
+        // Start or restart game
+        function startGame() {
+            // Reset game variables
+            gameRunning = true;
+            roadOffset = 0;
+            player = new Player();
+            enemies = [];
+            bullets = [];
+            ammoPowerups = [];
+            timer = TIME_LIMIT;
+            distance = 0;
+            ammo = STARTING_AMMO;
+            lastTimerUpdate = Date.now();
+            lastAmmoPickup = Date.now();
+            checkpointReached = false;
+            level = 1;
+            
+            // Update HUD
+            document.getElementById("timer").textContent = timer;
+            document.getElementById("distance").textContent = 0;
+            document.getElementById("checkpoint-distance").textContent = CHECKPOINT_DISTANCE;
+            document.getElementById("ammo").textContent = ammo;
+            document.getElementById("speed").textContent = 0;
+            
+            // Hide screens
+            document.getElementById("start-screen").style.display = "none";
+            document.getElementById("game-over-screen").style.display = "none";
+            document.getElementById("level-complete-screen").style.display = "none";
+            
+            // Set up keyboard controls
+            setupControls();
+            
+            // Start game loop
+            if (gameLoop) cancelAnimationFrame(gameLoop);
+            gameLoop = requestAnimationFrame(update);
+        }
+
+        function nextLevel() {
+            // Hide level complete screen
+            document.getElementById("level-complete-screen").style.display = "none";
+            
+            // Reset for next level
+            gameRunning = true;
+            enemies = [];
+            bullets = [];
+            ammoPowerups = [];
+            timer = TIME_LIMIT; // Reset timer for next checkpoint
+            distance = 0;
+            checkpointReached = false;
+            level++;
+            
+            // Update HUD
+            document.getElementById("timer").textContent = timer;
+            document.getElementById("distance").textContent = 0;
+            document.getElementById("checkpoint-distance").textContent = CHECKPOINT_DISTANCE;
+            
+            // Restart game loop
+            if (gameLoop) cancelAnimationFrame(gameLoop);
+            gameLoop = requestAnimationFrame(update);
+        }
+
+        // Set up keyboard controls
+        const keysDown = {};
+        
+        function setupControls() {
+            window.addEventListener("keydown", function(e) {
+                keysDown[e.key] = true;
+                
+                // Space key for shooting
+                if (e.key === " " && gameRunning) {
+                    player.shoot();
+                }
+                
+                // Prevent default for arrow keys and space
+                if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+                    e.preventDefault();
+                }
+            });
+            
+            window.addEventListener("keyup", function(e) {
+                delete keysDown[e.key];
+            });
+        }
+
+        // Main game loop
+        function update() {
+            if (gameRunning) {
+                // Update timer
+                const now = Date.now();
+                if (now - lastTimerUpdate >= 1000) {
+                    timer--;
+                    document.getElementById("timer").textContent = timer;
+                    lastTimerUpdate = now;
+                    
+                    // Check if time is up
+                    if (timer <= 0) {
+                        gameOver();
+                        return;
+                    }
+                }
+                
+                // Update distance
+                distance += ROAD_SPEED;
+                document.getElementById("distance").textContent = Math.floor(distance);
+                
+                // Check if checkpoint reached
+                if (distance >= CHECKPOINT_DISTANCE && !checkpointReached) {
+                    levelComplete();
+                    return;
+                }
+                
+                // Handle player input
+                handleInput();
+                
+                // Update player
+                player.update();
+                
+                // Update road
+                roadOffset = (roadOffset + ROAD_SPEED) % 40;
+                
+                // Spawn enemies
+                if (Math.random() < 0.02 * level) {
+                    // Choose random lane
+                    const lane = Math.floor(Math.random() * LANE_COUNT);
+                    enemies.push(new Enemy(lane));
+                }
+                
+                // Update enemies
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    if (enemies[i].update()) {
+                        enemies.splice(i, 1);
+                    }
+                }
+                
+                // Update bullets
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    if (bullets[i].update()) {
+                        bullets.splice(i, 1);
+                    }
+                }
+                
+                // Spawn ammo powerups
+                if (Date.now() - lastAmmoPickup > AMMO_RESPAWN_TIME && Math.random() < 0.005) {
+                    ammoPowerups.push(new AmmoPowerup());
+                }
+                
+                // Update ammo powerups
+                for (let i = ammoPowerups.length - 1; i >= 0; i--) {
+                    if (ammoPowerups[i].update()) {
+                        ammoPowerups.splice(i, 1);
+                    }
+                }
+                
+                // Update HUD
+                document.getElementById("speed").textContent = Math.floor(ROAD_SPEED * 20);
+                
+                // Draw everything
+                draw();
+                
+                // Continue loop
+                gameLoop = requestAnimationFrame(update);
+            }
+        }
+
+        // Handle player input
+        function handleInput() {
+            if (keysDown["ArrowLeft"] || keysDown["a"]) {
+                player.xSpeed -= player.acceleration;
+                if (player.xSpeed < -player.maxSpeed) player.xSpeed = -player.maxSpeed;
+            }
+            if (keysDown["ArrowRight"] || keysDown["d"]) {
+                player.xSpeed += player.acceleration;
+                if (player.xSpeed > player.maxSpeed) player.xSpeed = player.maxSpeed;
+            }
+            if (keysDown["ArrowUp"] || keysDown["w"]) {
+                player.ySpeed -= player.acceleration;
+                if (player.ySpeed < -player.maxSpeed / 2) player.ySpeed = -player.maxSpeed / 2;
+            }
+            if (keysDown["ArrowDown"] || keysDown["s"]) {
+                player.ySpeed += player.acceleration;
+                if (player.ySpeed > player.maxSpeed / 2) player.ySpeed = player.maxSpeed / 2;
+            }
+        }
+
+        // Draw everything
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+            
+            // Draw road
+            drawRoad();
+            
+            // Draw checkpoint if close
+            if (CHECKPOINT_DISTANCE - distance < GAME_HEIGHT && !checkpointReached) {
+                const checkpointY = GAME_HEIGHT - (CHECKPOINT_DISTANCE - distance);
+                drawCheckpoint(checkpointY);
+            }
+            
+            // Draw ammo powerups
+            ammoPowerups.forEach(powerup => powerup.draw());
+            
+            // Draw enemies
+            enemies.forEach(enemy => enemy.draw());
+            
+            // Draw player
+            player.draw();
+            
+            // Draw bullets
+            bullets.forEach(bullet => bullet.draw());
+        }
+
+        // Draw road with scrolling effect
+        function drawRoad() {
+            // Draw road background
+            ctx.fillStyle = "#444";
+            ctx.fillRect(ROAD_EDGE_LEFT, 0, ROAD_WIDTH, GAME_HEIGHT);
+            
+            // Draw road markings
+            ctx.fillStyle = "#fff";
+            
+            // Draw center lines
+            for (let i = 1; i < LANE_COUNT; i++) {
+                const x = ROAD_EDGE_LEFT + i * LANE_WIDTH;
+                
+                // Dashed lines
+                for (let j = -1; j < GAME_HEIGHT / 40 + 1; j++) {
+                    ctx.fillRect(x - 2, (j * 40) + roadOffset, 4, 20);
+                }
+            }
+            
+            // Draw side lines
+            ctx.fillRect(ROAD_EDGE_LEFT, 0, 5, GAME_HEIGHT);
+            ctx.fillRect(ROAD_EDGE_RIGHT - 5, 0, 5, GAME_HEIGHT);
+            
+            // Draw grass
+            ctx.fillStyle = "#0a0";
+            ctx.fillRect(0, 0, ROAD_EDGE_LEFT, GAME_HEIGHT);
+            ctx.fillRect(ROAD_EDGE_RIGHT, 0, GAME_WIDTH - ROAD_EDGE_RIGHT, GAME_HEIGHT);
+            
+            // Draw distance markers
+            const markerSpacing = 200;
+            const firstVisibleMarker = Math.floor(distance / markerSpacing) * markerSpacing;
+            
+            for (let i = firstVisibleMarker; i < firstVisibleMarker + GAME_HEIGHT + markerSpacing; i += markerSpacing) {
+                const y = GAME_HEIGHT - (i - distance);
+                
+                if (y >= 0 && y <= GAME_HEIGHT) {
+                    ctx.fillStyle = "#fff";
+                    ctx.font = "10px Arial";
+                    ctx.fillText(`${i}m`, ROAD_EDGE_LEFT - 30, y);
+                    ctx.fillText(`${i}m`, ROAD_EDGE_RIGHT + 5, y);
+                }
+            }
+        }
+
+        // Draw checkpoint
+        function drawCheckpoint(y) {
+            ctx.fillStyle = "#f00";
+            ctx.fillRect(ROAD_EDGE_LEFT, y - 5, ROAD_WIDTH, 10);
+            
+            // Checkpoint pattern
+            ctx.fillStyle = "#fff";
+            const squareSize = 20;
+            const squares = Math.ceil(ROAD_WIDTH / squareSize);
+            
+            for (let i = 0; i < squares; i++) {
+                if (i % 2 === 0) {
+                    ctx.fillRect(ROAD_EDGE_LEFT + i * squareSize, y - 5, squareSize, 10);
+                }
+            }
+            
+            // Checkpoint text
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 20px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("CHECKPOINT", GAME_WIDTH / 2, y - 15);
+        }
+
+        // Game over function
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById("game-over-screen").style.display = "block";
+        }
+
+        // Level complete function
+        function levelComplete() {
+            gameRunning = false;
+            checkpointReached = true;
+            document.getElementById("level-complete-screen").style.display = "block";
+            
+            // Update level complete message
+            const levelCompleteMsg = document.querySelector("#level-complete-screen p");
+            levelCompleteMsg.textContent = `Well done! You reached the checkpoint with ${timer} seconds remaining. Ready for the next section?`;
+        }
+
+        // Initialize game when page loads
+        window.addEventListener("load", init);
+    </script>
+</body>
+</html>

@@ -2,4 +2,4 @@
 
 <BR>
 
-This code was written by Claude AI
+This code was written by Claude AI. Take the code do what you want with it. Have fun!
